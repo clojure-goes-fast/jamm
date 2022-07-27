@@ -4,6 +4,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.ref.Reference;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
@@ -22,6 +23,15 @@ abstract class MemoryMeterBase extends MemoryMeter
         protected MethodHandle[] computeValue(Class<?> type)
         {
             return declaredClassFields0(type);
+        }
+    };
+
+    private final ClassValue<long[]> declaredClassFieldOffsetsCache = new ClassValue<long[]>()
+    {
+        @Override
+        protected long[] computeValue(Class<?> type)
+        {
+            return declaredClassFieldOffsets0(type);
         }
     };
 
@@ -44,6 +54,17 @@ abstract class MemoryMeterBase extends MemoryMeter
     abstract long measureArray(Object obj, Class<?> type);
 
     abstract long measureNonArray(Object obj, Class<?> type);
+
+    private static boolean isJava17plus() {
+        try {
+            Method f = Runtime.class.getDeclaredMethod("version");
+            Object ver = f.invoke(Runtime.class, new Object[0]);
+            Class c = ver.getClass();
+            Method f2 = c.getDeclaredMethod("feature");
+            Integer feature = (Integer)f2.invoke(ver, new Object[0]);
+            return feature >= 17;
+        } catch (Exception e) { return false; }
+    }
 
     /**
      * @return the memory usage of @param object including referenced objects
@@ -116,12 +137,22 @@ abstract class MemoryMeterBase extends MemoryMeter
             {
                 Class<?> cls = current.getClass();
                 Object child;
-                for (MethodHandle field : declaredClassFields(cls))
-                {
-                    child = field.invoke(current);
+                if (isJava17plus()) {
+                    for (long offset : declaredClassFieldOffsets(cls))
+                        {
+                            child = MemoryMeterUnsafe.unsafe.getObject(current, offset);
 
-                    if (child != null && tracker.add(child) && !ignoreClass.get(child.getClass()) && child != referent)
-                        stack.push(child);
+                            if (child != null && tracker.add(child) && !ignoreClass.get(child.getClass()) && child != referent)
+                                stack.push(child);
+                        }
+                } else {
+                    for (MethodHandle field : declaredClassFields(cls))
+                        {
+                            child = field.invoke(current);
+
+                            if (child != null && tracker.add(child) && !ignoreClass.get(child.getClass()) && child != referent)
+                                stack.push(child);
+                        }
                 }
             }
             catch (Throwable t)
@@ -219,6 +250,11 @@ abstract class MemoryMeterBase extends MemoryMeter
         return declaredClassFieldsCache.get(cls);
     }
 
+    private long[] declaredClassFieldOffsets(Class<?> cls)
+    {
+        return declaredClassFieldOffsetsCache.get(cls);
+    }
+
     @SuppressWarnings("deprecation")
     private MethodHandle[] declaredClassFields0(Class<?> cls)
     {
@@ -254,5 +290,32 @@ abstract class MemoryMeterBase extends MemoryMeter
             }
         }
         return mhs.toArray(new MethodHandle[0]);
+    }
+
+    private long[] declaredClassFieldOffsets0(Class<?> cls)
+    {
+        List<Long> offsets = new ArrayList<>();
+        for (; !skipClass(cls); cls = cls.getSuperclass())
+        {
+            for (Field f : cls.getDeclaredFields())
+            {
+                if (!f.getType().isPrimitive()
+                    && !Modifier.isStatic(f.getModifiers())
+                    && !f.isAnnotationPresent(Unmetered.class)
+                    && !(ignoreOuterClassReference && f.getName().matches(outerClassReference))
+                    && !ignoreClass.get(f.getType()))
+                {
+                    try
+                    {
+                        offsets.add(MemoryMeterUnsafe.unsafe.objectFieldOffset(f));
+                    }
+                    catch (Exception e)
+                    {
+                        throw new RuntimeException(e);
+                    }
+               }
+            }
+        }
+        return offsets.stream().mapToLong(l -> l).toArray();
     }
 }

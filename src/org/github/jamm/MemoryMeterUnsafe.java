@@ -9,7 +9,7 @@ final class MemoryMeterUnsafe extends MemoryMeterRef
 {
     private static boolean warned;
 
-    private static final Unsafe unsafe;
+    static final Unsafe unsafe;
 
     static
     {
