@@ -55,15 +55,17 @@ abstract class MemoryMeterBase extends MemoryMeter
 
     abstract long measureNonArray(Object obj, Class<?> type);
 
-    private static boolean isJava17plus() {
+    private static boolean isJava17plus;
+
+    static {
         try {
             Method f = Runtime.class.getDeclaredMethod("version");
             Object ver = f.invoke(Runtime.class, new Object[0]);
             Class c = ver.getClass();
             Method f2 = c.getDeclaredMethod("feature");
             Integer feature = (Integer)f2.invoke(ver, new Object[0]);
-            return feature >= 17;
-        } catch (Exception e) { return false; }
+            isJava17plus = feature >= 17;
+        } catch (Exception e) { isJava17plus = false; }
     }
 
     /**
@@ -137,7 +139,7 @@ abstract class MemoryMeterBase extends MemoryMeter
             {
                 Class<?> cls = current.getClass();
                 Object child;
-                if (isJava17plus()) {
+                if (isJava17plus) {
                     for (long offset : declaredClassFieldOffsets(cls))
                         {
                             child = MemoryMeterUnsafe.unsafe.getObject(current, offset);
@@ -311,7 +313,7 @@ abstract class MemoryMeterBase extends MemoryMeter
                     }
                     catch (Exception e)
                     {
-                        throw new RuntimeException(e);
+                        System.err.println("Exception raised when accessing a field with Unsafe, further calculation is no longer accurate. ::: " + e.getMessage());
                     }
                }
             }
